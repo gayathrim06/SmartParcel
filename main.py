@@ -1,6 +1,5 @@
 
 import os
-import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -9,6 +8,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from sqlalchemy import create_engine, text, inspect
+
 # --------------------------------------------------
 # CONFIGURATION
 # --------------------------------------------------
@@ -16,11 +17,34 @@ from pydantic import BaseModel, Field
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
-DB_PATH = Path(
-    os.getenv("DB_PATH", str(BASE_DIR / "data" / "parcel.db"))
-)
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Match the ESP32 zero threshold
+# Render PostgreSQL URLs may begin with postgres://
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace(
+        "postgres://",
+        "postgresql://",
+        1
+    )
+
+# Use PostgreSQL on Render and SQLite locally
+if DATABASE_URL:
+    engine = create_engine(
+        DATABASE_URL,
+        pool_pre_ping=True,
+        pool_recycle=300
+    )
+    DATABASE_TYPE = "PostgreSQL"
+else:
+    DB_PATH = BASE_DIR / "data" / "parcel.db"
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    engine = create_engine(
+        f"sqlite:///{DB_PATH.as_posix()}",
+        connect_args={"check_same_thread": False}
+    )
+    DATABASE_TYPE = "SQLite"
+
 EMPTY_THRESHOLD_G = 0.5
 
 app = FastAPI(title="PARCELGUARD - Smart Parcel Verification")
@@ -32,63 +56,47 @@ app.mount(
 )
 
 # --------------------------------------------------
-# DATABASE
+# DATABASE INITIALIZATION
 # --------------------------------------------------
-
-def get_connection():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-    db = sqlite3.connect(DB_PATH, timeout=10)
-    db.row_factory = sqlite3.Row
-    db.execute("PRAGMA journal_mode=WAL")
-
-    return db
-
 
 def initialize_database():
 
-    with get_connection() as db:
+    with engine.begin() as db:
 
-        db.execute("""
-            CREATE TABLE IF NOT EXISTS settings (
-                id INTEGER PRIMARY KEY CHECK(id=1),
-                expected_weight_g REAL NOT NULL DEFAULT 400,
-                tolerance_g REAL NOT NULL DEFAULT 5
-            )
-        """)
+        if DATABASE_TYPE == "PostgreSQL":
 
-        db.execute("""
-            INSERT OR IGNORE INTO settings
-            (id, expected_weight_g, tolerance_g)
-            VALUES (1, 400, 5)
-        """)
+            db.execute(text("""
+                CREATE TABLE IF NOT EXISTS settings (
+                    id INTEGER PRIMARY KEY,
+                    expected_weight_g DOUBLE PRECISION NOT NULL DEFAULT 400,
+                    tolerance_g DOUBLE PRECISION NOT NULL DEFAULT 5
+                )
+            """))
 
-        db.execute("""
-            CREATE TABLE IF NOT EXISTS readings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                actual_weight_g REAL NOT NULL,
-                expected_weight_g REAL NOT NULL,
-                tolerance_g REAL NOT NULL,
-                status TEXT NOT NULL,
-                source TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            )
-        """)
+            db.execute(text("""
+                CREATE TABLE IF NOT EXISTS readings (
+                    id BIGSERIAL PRIMARY KEY,
+                    actual_weight_g DOUBLE PRECISION NOT NULL,
+                    expected_weight_g DOUBLE PRECISION NOT NULL,
+                    tolerance_g DOUBLE PRECISION NOT NULL,
+                    status VARCHAR(30) NOT NULL,
+                    source VARCHAR(50) NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """))
 
-        columns = {
-            row["name"]
-            for row in db.execute(
-                "PRAGMA table_info(readings)"
-            ).fetchall()
-        }
+        else:
 
-        # Migrate the older database format if necessary
-        if "actual_weight_g" not in columns and "actual_weight" in columns:
+            db.execute(text("""
+                CREATE TABLE IF NOT EXISTS settings (
+                    id INTEGER PRIMARY KEY,
+                    expected_weight_g REAL NOT NULL DEFAULT 400,
+                    tolerance_g REAL NOT NULL DEFAULT 5
+                )
+            """))
 
-            print("Migrating old database...")
-
-            db.execute("""
-                CREATE TABLE readings_new (
+            db.execute(text("""
+                CREATE TABLE IF NOT EXISTS readings (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     actual_weight_g REAL NOT NULL,
                     expected_weight_g REAL NOT NULL,
@@ -97,51 +105,54 @@ def initialize_database():
                     source TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 )
-            """)
+            """))
 
-            db.execute("""
-                INSERT INTO readings_new
-                SELECT
-                    id,
-                    actual_weight,
-                    expected_weight,
-                    5,
-                    status,
-                    source,
-                    created_at
-                FROM readings
-            """)
+        # Insert default settings only if they do not exist
+        if DATABASE_TYPE == "PostgreSQL":
+            db.execute(text("""
+                INSERT INTO settings
+                (id, expected_weight_g, tolerance_g)
+                VALUES (1, 400, 5)
+                ON CONFLICT (id) DO NOTHING
+            """))
+        else:
+            db.execute(text("""
+                INSERT OR IGNORE INTO settings
+                (id, expected_weight_g, tolerance_g)
+                VALUES (1, 400, 5)
+            """))
 
-            db.execute("DROP TABLE readings")
+        # Check and migrate older SQLite readings table
+        if DATABASE_TYPE == "SQLite":
 
-            db.execute("""
-                ALTER TABLE readings_new
-                RENAME TO readings
-            """)
+            columns = {
+                column["name"]
+                for column in inspect(engine).get_columns("readings")
+            }
 
-            print("Database migration completed.")
+            if "actual_weight_g" not in columns and "actual_weight" in columns:
 
-        required = {
-            "id",
-            "actual_weight_g",
-            "expected_weight_g",
-            "tolerance_g",
-            "status",
-            "source",
-            "created_at"
-        }
+                print("Migrating older SQLite readings table...")
 
-        final_columns = {
-            row["name"]
-            for row in db.execute(
-                "PRAGMA table_info(readings)"
-            ).fetchall()
-        }
+                db.execute(text("""
+                    ALTER TABLE readings
+                    ADD COLUMN actual_weight_g REAL
+                """))
 
-        if not required.issubset(final_columns):
-            raise RuntimeError("Unsupported readings database structure.")
+                db.execute(text("""
+                    UPDATE readings
+                    SET actual_weight_g = actual_weight
+                """))
 
-    print("Database initialized successfully.")
+                if "tolerance_g" not in columns:
+                    db.execute(text("""
+                        ALTER TABLE readings
+                        ADD COLUMN tolerance_g REAL NOT NULL DEFAULT 5
+                    """))
+
+                print("Older SQLite migration completed.")
+
+    print(f"{DATABASE_TYPE} database initialized successfully.")
 
 
 initialize_database()
@@ -166,12 +177,15 @@ class VerificationSettings(BaseModel):
 
 def get_settings():
 
-    with get_connection() as db:
-        row = db.execute("""
+    with engine.connect() as db:
+        row = db.execute(text("""
             SELECT expected_weight_g, tolerance_g
             FROM settings
-            WHERE id=1
-        """).fetchone()
+            WHERE id = 1
+        """)).mappings().first()
+
+    if row is None:
+        raise RuntimeError("Settings record not found.")
 
     return dict(row)
 
@@ -184,16 +198,16 @@ def read_settings():
 @app.put("/api/settings")
 def update_settings(settings: VerificationSettings):
 
-    with get_connection() as db:
-        db.execute("""
+    with engine.begin() as db:
+        db.execute(text("""
             UPDATE settings
-            SET expected_weight_g=?,
-                tolerance_g=?
-            WHERE id=1
-        """, (
-            settings.expected_weight_g,
-            settings.tolerance_g
-        ))
+            SET expected_weight_g = :expected,
+                tolerance_g = :tolerance
+            WHERE id = 1
+        """), {
+            "expected": settings.expected_weight_g,
+            "tolerance": settings.tolerance_g
+        })
 
     return {
         "message": "Settings saved successfully",
@@ -239,7 +253,8 @@ def home():
 def health():
     return {
         "status": "online",
-        "project": "PARCELGUARD"
+        "project": "PARCELGUARD",
+        "database": DATABASE_TYPE
     }
 
 
@@ -264,9 +279,9 @@ def receive_sensor_reading(reading: SensorReading):
 
     created_at = datetime.now(timezone.utc).isoformat()
 
-    with get_connection() as db:
+    with engine.begin() as db:
 
-        cursor = db.execute("""
+        result = db.execute(text("""
             INSERT INTO readings (
                 actual_weight_g,
                 expected_weight_g,
@@ -275,23 +290,32 @@ def receive_sensor_reading(reading: SensorReading):
                 source,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            actual,
-            expected,
-            tolerance,
-            status,
-            reading.source,
-            created_at
-        ))
+            VALUES (
+                :actual,
+                :expected,
+                :tolerance,
+                :status,
+                :source,
+                :created_at
+            )
+            RETURNING id
+        """), {
+            "actual": actual,
+            "expected": expected,
+            "tolerance": tolerance,
+            "status": status,
+            "source": reading.source,
+            "created_at": created_at
+        })
 
-        reading_id = cursor.lastrowid
+        reading_id = result.scalar_one()
 
     print(
         f"Reading: {actual} g | "
         f"Expected: {expected} g | "
         f"Tolerance: {tolerance} g | "
-        f"Status: {status}"
+        f"Status: {status} | "
+        f"Database: {DATABASE_TYPE}"
     )
 
     return {
@@ -316,26 +340,28 @@ def dashboard_data(limit: int = 120):
 
     settings = get_settings()
 
-    with get_connection() as db:
+    with engine.connect() as db:
 
-        latest = db.execute("""
+        latest = db.execute(text("""
             SELECT *
             FROM readings
             ORDER BY id DESC
             LIMIT 1
-        """).fetchone()
+        """)).mappings().first()
 
-        history = db.execute("""
+        history = db.execute(text("""
             SELECT *
             FROM readings
             ORDER BY id DESC
-            LIMIT ?
-        """, (limit,)).fetchall()
+            LIMIT :limit
+        """), {
+            "limit": limit
+        }).mappings().all()
 
-        total = db.execute("""
+        total = db.execute(text("""
             SELECT COUNT(*) AS n
             FROM readings
-        """).fetchone()["n"]
+        """)).scalar_one()
 
     return {
         "settings": settings,
@@ -356,16 +382,18 @@ def reading_history(limit: int = 50):
 
     limit = max(1, min(limit, 500))
 
-    with get_connection() as db:
-        rows = db.execute("""
+    with engine.connect() as db:
+        rows = db.execute(text("""
             SELECT *
             FROM readings
             ORDER BY id DESC
-            LIMIT ?
-        """, (limit,)).fetchall()
+            LIMIT :limit
+        """), {
+            "limit": limit
+        }).mappings().all()
 
     return [dict(row) for row in rows]
 
 
 print("PARCELGUARD backend loaded.")
-print(f"Database location: {DB_PATH}")
+print(f"Active database: {DATABASE_TYPE}")
