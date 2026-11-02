@@ -1,170 +1,167 @@
-
+#include "HX711.h"
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
-#include "HX711.h"
 
-// Wi-Fi hotspot details
-const char* WIFI_SSID = "moto edge 60 pro_1842";
-const char* WIFI_PASSWORD = "12345678";
+// ==========================================
+// PARCELGUARD - SMART PARCEL WEIGHT SYSTEM
+// ==========================================
 
-// PARCELGUARD Render API
-const char* SERVER_URL =
-  "https://smartparcel-tcf5.onrender.com/api/sensor";
+// WIFI SETTINGS
+const char* ssid = "moto edge 60 pro_1842";
+const char* password = "12345678";
 
-// HX711 connections
-#define DT_PIN 4
-#define SCK_PIN 5
+// RENDER CLOUD BACKEND
+const char* serverURL =
+"https://smartparcel-tcf5.onrender.com/api/sensor";
+
+// HX711 PINS
+#define DT 4
+#define SCK 5
 
 HX711 scale;
 
-// Calibration factor from your calibrated load cell
+// CORRECTED CALIBRATION FACTOR
 float calibration_factor = -432.04;
 
-unsigned long lastSend = 0;
-const unsigned long SEND_INTERVAL_MS = 2000;
-
-void connectWiFi() {
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-  Serial.print("Connecting to Wi-Fi '");
-  Serial.print(WIFI_SSID);
-  Serial.print("'");
-
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 40) {
-    delay(500);
-    Serial.print(".");
-    attempts++;
-  }
-
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nWi-Fi connected!");
-    Serial.print("ESP32 IP: ");
-    Serial.println(WiFi.localIP());
-    Serial.print("Signal (RSSI): ");
-    Serial.print(WiFi.RSSI());
-    Serial.println(" dBm");
-  } else {
-    Serial.println("\nWi-Fi connection FAILED!");
-    Serial.println("IMPORTANT: Ensure hotspot is 2.4 GHz (ESP32 does NOT support 5 GHz).");
-  }
-}
+// ==========================================
+// SETUP
+// ==========================================
 
 void setup() {
+
   Serial.begin(115200);
   delay(1000);
 
-  Serial.println("\n================================");
-  Serial.println(" PARCELGUARD - LIVE SENSOR");
+  Serial.println();
+  Serial.println("================================");
+  Serial.println("       PARCELGUARD SYSTEM");
   Serial.println("================================");
 
-  Serial.println("Keep platform EMPTY during startup tare.");
+  // Initialize HX711
+  scale.begin(DT, SCK);
 
-  scale.begin(DT_PIN, SCK_PIN);
-  delay(1500);
+  Serial.println("Initializing HX711...");
 
-  if (!scale.is_ready()) {
-    Serial.println("ERROR: HX711 not detected. Check wiring.");
-
-    while (true) {
-      delay(1000);
-    }
+  while (!scale.is_ready()) {
+    Serial.println("Waiting for HX711...");
+    delay(1000);
   }
 
+  Serial.println("HX711 READY!");
+
+  // Apply calibration
   scale.set_scale(calibration_factor);
-  scale.tare(20);
 
-  Serial.println("HX711 ready!");
-  Serial.println("Zero calibration complete.");
+  // Zero the empty platform
+  Serial.println("Taring scale...");
+  scale.tare();
 
-  connectWiFi();
+  Serial.println("Calibration completed!");
+
+  // Connect WiFi
+  Serial.println("Connecting to WiFi...");
+
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println();
+  Serial.println("WiFi Connected!");
+
+  Serial.print("ESP32 IP Address: ");
+  Serial.println(WiFi.localIP());
+
+  Serial.println("PARCELGUARD READY!");
 }
 
+// ==========================================
+// MAIN LOOP
+// ==========================================
+
 void loop() {
-  if (WiFi.status() != WL_CONNECTED) {
-    connectWiFi();
+
+  if (!scale.is_ready()) {
+    Serial.println("HX711 NOT READY!");
+    delay(1000);
+    return;
   }
 
-  if (millis() - lastSend >= SEND_INTERVAL_MS) {
-    if (!scale.is_ready()) {
-      Serial.println("HX711 not ready. No reading sent.");
-      lastSend = millis();
-      return;
-    }
+  // Read weight in grams
+  float weightGrams = scale.get_units(10);
 
-    // Read weight in kg and convert to grams
-    float weightKg = scale.get_units(5);
-    float weightGrams = weightKg * 1000.0;
+  // Prevent negative readings
+  if (weightGrams < 0) {
+    weightGrams = 0;
+  }
 
-    // Remove small zero fluctuations
-    if (weightGrams > -2.0 && weightGrams < 2.0) {
-      weightGrams = 0.0;
-    }
+  Serial.println("--------------------------------");
 
-    if (weightGrams < 0) {
-      weightGrams = 0.0;
-    }
+  Serial.print("LIVE WEIGHT: ");
+  Serial.print(weightGrams, 2);
+  Serial.println(" g");
 
-    Serial.print("LIVE WEIGHT: ");
-    Serial.print(weightGrams, 2);
-    Serial.println(" g");
+  // Check WiFi
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi Disconnected!");
+    WiFi.reconnect();
+    delay(1000);
+    return;
+  }
 
-    if (WiFi.status() == WL_CONNECTED) {
-      // HTTPS connection to Render
-      WiFiClientSecure client;
-      client.setInsecure(); // Bypass cert chain validation on ESP32
+  // Send data to Render backend over HTTPS
+  WiFiClientSecure client;
+  client.setInsecure(); // Required for HTTPS connection
 
-      HTTPClient http;
-      http.setTimeout(30000); // 30s timeout for Render free-tier cold starts
+  HTTPClient http;
+  http.setTimeout(30000); // 30s timeout for Render free tier
 
-      if (http.begin(client, SERVER_URL)) {
-        http.setUserAgent("ESP32-ParcelGuard/1.0");
-        http.addHeader("Content-Type", "application/json");
-        http.addHeader("Connection", "close");
+  if (http.begin(client, serverURL)) {
 
-        String body =
-          "{\"actual_weight_g\":" + String(weightGrams, 2) +
-          ",\"source\":\"ESP32\"}";
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("Connection", "close");
 
-        Serial.println("Sending data to PARCELGUARD on Render...");
+    String jsonData = "{";
+    jsonData += "\"actual_weight_g\":";
+    jsonData += String(weightGrams, 2);
+    jsonData += ",";
+    jsonData += "\"source\":\"ESP32\"";
+    jsonData += "}";
 
-        int httpCode = http.POST(body);
+    Serial.println("Sending data to Render cloud...");
 
-        Serial.print("HTTP RESPONSE: ");
-        Serial.println(httpCode);
+    int responseCode = http.POST(jsonData);
 
-        if (httpCode > 0) {
-          Serial.println("SERVER RESPONSE:");
-          Serial.println(http.getString());
+    Serial.print("HTTP Response Code: ");
+    Serial.println(responseCode);
 
-          if (httpCode == 200 || httpCode == 201) {
-            Serial.println(">> DATA SENT SUCCESSFULLY! <<");
-          }
-        } else {
-          Serial.print("HTTPS ERROR: ");
-          Serial.println(http.errorToString(httpCode));
-          if (httpCode == -1) {
-            Serial.println("Hint: If Render was sleeping, it takes ~30-50s to wake up on free tier.");
-          }
-        }
+    if (responseCode > 0) {
 
-        http.end();
-      } else {
-        Serial.println("Unable to connect to Render server.");
+      String response = http.getString();
+
+      Serial.print("Server Response: ");
+      Serial.println(response);
+
+      if (responseCode == 200 || responseCode == 201) {
+        Serial.println("DATA SENT TO RENDER SUCCESSFULLY!");
       }
 
-      client.stop();
     } else {
-      Serial.println("Skipping send: Wi-Fi not connected.");
+
+      Serial.println("SERVER CONNECTION FAILED!");
+      Serial.println(http.errorToString(responseCode));
+
     }
 
-    Serial.print("Free Heap: ");
-    Serial.print(ESP.getFreeHeap());
-    Serial.println(" bytes");
-    Serial.println("--------------------------------");
+    http.end();
+    client.stop();
 
-    lastSend = millis();
+  } else {
+    Serial.println("Unable to initiate connection to Render.");
   }
+
+  delay(2000); // 2 second pause between cloud uploads
 }
