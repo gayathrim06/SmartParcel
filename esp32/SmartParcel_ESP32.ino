@@ -18,26 +18,38 @@ const char* SERVER_URL =
 
 HX711 scale;
 
-// Calibration factor from your supplied Arduino sketch
-float calibration_factor = -138138.0;
+// Calibration factor from your calibrated load cell
+float calibration_factor = -432.04;
 
 unsigned long lastSend = 0;
-const unsigned long SEND_INTERVAL_MS = 1000;
+const unsigned long SEND_INTERVAL_MS = 2000;
 
 void connectWiFi() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-  Serial.print("Connecting to Wi-Fi");
+  Serial.print("Connecting to Wi-Fi '");
+  Serial.print(WIFI_SSID);
+  Serial.print("'");
 
-  while (WiFi.status() != WL_CONNECTED) {
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 40) {
     delay(500);
     Serial.print(".");
+    attempts++;
   }
 
-  Serial.println("\nWi-Fi connected!");
-  Serial.print("ESP32 IP: ");
-  Serial.println(WiFi.localIP());
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nWi-Fi connected!");
+    Serial.print("ESP32 IP: ");
+    Serial.println(WiFi.localIP());
+    Serial.print("Signal (RSSI): ");
+    Serial.print(WiFi.RSSI());
+    Serial.println(" dBm");
+  } else {
+    Serial.println("\nWi-Fi connection FAILED!");
+    Serial.println("IMPORTANT: Ensure hotspot is 2.4 GHz (ESP32 does NOT support 5 GHz).");
+  }
 }
 
 void setup() {
@@ -76,10 +88,9 @@ void loop() {
   }
 
   if (millis() - lastSend >= SEND_INTERVAL_MS) {
-    lastSend = millis();
-
     if (!scale.is_ready()) {
       Serial.println("HX711 not ready. No reading sent.");
+      lastSend = millis();
       return;
     }
 
@@ -100,47 +111,60 @@ void loop() {
     Serial.print(weightGrams, 2);
     Serial.println(" g");
 
-    // HTTPS connection to Render
-    WiFiClientSecure client;
+    if (WiFi.status() == WL_CONNECTED) {
+      // HTTPS connection to Render
+      WiFiClientSecure client;
+      client.setInsecure(); // Bypass cert chain validation on ESP32
 
-    // Testing only: encrypted connection without
-    // verifying the server certificate.
-    client.setInsecure();
+      HTTPClient http;
+      http.setTimeout(30000); // 30s timeout for Render free-tier cold starts
 
-    HTTPClient http;
-    http.setTimeout(15000);
+      if (http.begin(client, SERVER_URL)) {
+        http.setUserAgent("ESP32-ParcelGuard/1.0");
+        http.addHeader("Content-Type", "application/json");
+        http.addHeader("Connection", "close");
 
-    if (http.begin(client, SERVER_URL)) {
-      http.addHeader("Content-Type", "application/json");
+        String body =
+          "{\"actual_weight_g\":" + String(weightGrams, 2) +
+          ",\"source\":\"ESP32\"}";
 
-      String body =
-        "{\"actual_weight_g\":" + String(weightGrams, 2) +
-        ",\"source\":\"ESP32\"}";
+        Serial.println("Sending data to PARCELGUARD on Render...");
 
-      Serial.println("Sending data to PARCELGUARD...");
+        int httpCode = http.POST(body);
 
-      int httpCode = http.POST(body);
+        Serial.print("HTTP RESPONSE: ");
+        Serial.println(httpCode);
 
-      Serial.print("HTTP RESPONSE: ");
-      Serial.println(httpCode);
+        if (httpCode > 0) {
+          Serial.println("SERVER RESPONSE:");
+          Serial.println(http.getString());
 
-      if (httpCode > 0) {
-        Serial.println("SERVER RESPONSE:");
-        Serial.println(http.getString());
-
-        if (httpCode == 200 || httpCode == 201) {
-          Serial.println("DATA SENT SUCCESSFULLY!");
+          if (httpCode == 200 || httpCode == 201) {
+            Serial.println(">> DATA SENT SUCCESSFULLY! <<");
+          }
+        } else {
+          Serial.print("HTTPS ERROR: ");
+          Serial.println(http.errorToString(httpCode));
+          if (httpCode == -1) {
+            Serial.println("Hint: If Render was sleeping, it takes ~30-50s to wake up on free tier.");
+          }
         }
+
+        http.end();
       } else {
-        Serial.print("HTTPS ERROR: ");
-        Serial.println(http.errorToString(httpCode));
+        Serial.println("Unable to connect to Render server.");
       }
 
-      http.end();
+      client.stop();
     } else {
-      Serial.println("Unable to connect to Render server.");
+      Serial.println("Skipping send: Wi-Fi not connected.");
     }
 
+    Serial.print("Free Heap: ");
+    Serial.print(ESP.getFreeHeap());
+    Serial.println(" bytes");
     Serial.println("--------------------------------");
+
+    lastSend = millis();
   }
 }

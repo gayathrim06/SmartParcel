@@ -47,7 +47,17 @@ else:
 
 EMPTY_THRESHOLD_G = 0.5
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(title="PARCELGUARD - Smart Parcel Verification")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.mount(
     "/static",
