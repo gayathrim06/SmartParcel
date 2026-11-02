@@ -1,0 +1,826 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PARCELGUARD - Weight Verification</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+:root {
+  --bg:#0b1120;--card:#151f32;--card2:#101a2c;
+  --gold:#d6ad60;--gold-light:#f0ce86;
+  --text:#f8fafc;--muted:#94a3b8;--border:#29364b;
+  --green:#10b981;--yellow:#f59e0b;--red:#ef4444;
+}
+*{box-sizing:border-box;margin:0;padding:0;font-family:Segoe UI,Arial,sans-serif}
+body{background:var(--bg);color:var(--text);padding:24px;min-height:100vh}
+.container{max-width:1250px;margin:auto}
+header{display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap;margin-bottom:24px}
+.brand h1{font-size:27px;color:var(--gold-light)}
+.brand p{color:var(--muted);font-size:13px;margin-top:5px}
+.connection{padding:8px 14px;border-radius:20px;background:#25334a;color:var(--muted);font-size:13px}
+.connection.online{background:#064e3b;color:#6ee7b7}
+.connection.offline{background:#7f1d1d;color:#fecaca}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:18px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:13px;padding:20px;margin-bottom:18px}
+.metric-label{font-size:13px;color:var(--muted);margin-bottom:10px}
+.metric-value{font-size:27px;font-weight:700;color:var(--gold-light);font-variant-numeric:tabular-nums}
+.metric-sub{font-size:12px;color:var(--muted);margin-top:7px}
+.section-title{font-size:17px;color:var(--gold-light);margin-bottom:17px}
+.weight-card{text-align:center;padding:28px}
+.weight{font-size:clamp(45px,7vw,72px);font-weight:800;font-variant-numeric:tabular-nums}
+.unit{font-size:20px;color:var(--muted);margin-left:8px}
+.status{display:inline-block;padding:9px 19px;border-radius:30px;font-weight:700;font-size:13px;margin-top:15px;background:#334155;color:#cbd5e1}
+.status.pass{background:#064e3b;color:#6ee7b7}
+.status.under{background:#78350f;color:#fcd34d}
+.status.over{background:#7f1d1d;color:#fecaca}
+.status.wait{background:#334155;color:#cbd5e1}
+.notice{padding:13px;border:1px solid var(--border);border-radius:9px;background:var(--card2);color:var(--muted);text-align:center;margin-top:17px;font-size:14px}
+.controls{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+button{border:0;border-radius:8px;padding:13px 15px;font-size:14px;font-weight:700;cursor:pointer;transition:.2s}
+button:disabled{opacity:.4;cursor:not-allowed}
+.audio-btn{background:#475569;color:white}
+.audio-btn.active{background:var(--green)}
+.ready-btn,.save-btn{background:var(--gold);color:#111827}
+.done-btn{background:#334155;color:white;border:1px solid #64748b}
+input{width:100%;background:var(--card2);border:1px solid var(--border);color:white;padding:11px;border-radius:7px;font-size:15px}
+input:focus{outline:none;border-color:var(--gold)}
+.settings{display:grid;grid-template-columns:1fr 1fr;gap:15px;margin-bottom:15px}
+.field label{display:block;color:var(--muted);font-size:13px;margin-bottom:7px}
+.settings-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.message{font-size:13px;color:var(--muted)}
+.chart-wrap{height:300px;position:relative}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;min-width:650px}
+th,td{text-align:left;padding:12px;border-bottom:1px solid var(--border);font-size:13px}
+th{color:var(--gold-light);font-weight:600}
+td{color:#cbd5e1}
+.pill{padding:5px 9px;border-radius:15px;font-size:11px;font-weight:700}
+.pill.MATCH{background:#064e3b;color:#6ee7b7}
+.pill.UNDERWEIGHT{background:#78350f;color:#fcd34d}
+.pill.OVERWEIGHT{background:#7f1d1d;color:#fecaca}
+.pill.NO-PARCEL{background:#334155;color:#cbd5e1}
+.empty{text-align:center;color:var(--muted);padding:25px}
+.footer{text-align:center;color:#64748b;font-size:12px;padding:15px}
+@media(max-width:850px){.grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:600px){
+body{padding:13px}.grid{grid-template-columns:1fr 1fr;gap:9px}
+.card{padding:15px}.controls{grid-template-columns:1fr}
+.settings{grid-template-columns:1fr}.brand h1{font-size:22px}
+.metric-value{font-size:22px}
+}
+</style>
+</head>
+
+<body>
+<div class="container">
+
+<header>
+  <div class="brand">
+    <h1>PARCELGUARD</h1>
+    <p>IoT-Based Smart Parcel Weight Verification System</p>
+  </div>
+  <div id="connection" class="connection">Connecting...</div>
+</header>
+
+<div class="grid">
+  <div class="card">
+    <div class="metric-label">Total Readings</div>
+    <div class="metric-value" id="total">0</div>
+    <div class="metric-sub">Recorded measurements</div>
+  </div>
+  <div class="card">
+    <div class="metric-label">Expected Weight</div>
+    <div class="metric-value" id="expectedDisplay">400 g</div>
+    <div class="metric-sub">Configured parcel weight</div>
+  </div>
+  <div class="card">
+    <div class="metric-label">Tolerance</div>
+    <div class="metric-value" id="toleranceDisplay">5 g</div>
+    <div class="metric-sub">Allowed variation</div>
+  </div>
+  <div class="card">
+    <div class="metric-label">Last Update</div>
+    <div class="metric-value" id="lastUpdate" style="font-size:19px">--</div>
+    <div class="metric-sub">Latest sensor reading</div>
+  </div>
+</div>
+
+<div class="card weight-card">
+  <div class="metric-label">LIVE PARCEL WEIGHT</div>
+  <div>
+    <span class="weight" id="actual">0.00</span>
+    <span class="unit">g</span>
+  </div>
+  <div id="status" class="status wait">WAITING FOR SENSOR</div>
+  <div id="statusNote" class="notice">
+    Live monitoring is active.
+  </div>
+</div>
+
+<div class="card">
+  <h2 class="section-title">Parcel Verification Controls</h2>
+  <div class="controls">
+    <button id="soundButton" class="audio-btn" onclick="enableAudio()">🔊 Enable Sounds & Voice</button>
+    <button id="btnReady" class="ready-btn" onclick="startSession()" disabled>Ready to Place Parcel</button>
+    <button id="btnDone" class="done-btn" onclick="endSession()" disabled>Done - End Session</button>
+  </div>
+  <div id="sessionNotice" class="notice">
+    Enable audio, configure your parcel weight, and click Ready to begin verification.
+  </div>
+</div>
+
+<div class="card">
+  <h2 class="section-title">Weight Verification Settings</h2>
+  <div class="settings">
+    <div class="field">
+      <label for="targetInput">Expected Weight (grams)</label>
+      <input type="number" id="targetInput" min="0.01" step="0.01" value="400">
+    </div>
+    <div class="field">
+      <label for="toleranceInput">Tolerance (grams)</label>
+      <input type="number" id="toleranceInput" min="0" step="0.01" value="5">
+    </div>
+  </div>
+  <div class="settings-actions">
+    <button class="save-btn" id="saveSettings" onclick="saveSettings()">Save Settings</button>
+    <span id="settingsMessage" class="message"></span>
+  </div>
+</div>
+
+<div class="card">
+  <h2 class="section-title">Live Weight Monitoring</h2>
+  <div class="chart-wrap">
+    <canvas id="weightChart"></canvas>
+  </div>
+  <div id="chartStatus" class="message" style="margin-top:12px">
+    Waiting for sensor data...
+  </div>
+</div>
+
+<div class="card">
+  <h2 class="section-title">Measurement History</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Actual Weight</th>
+          <th>Expected Weight</th>
+          <th>Status</th>
+          <th>Source</th>
+        </tr>
+      </thead>
+      <tbody id="history">
+        <tr><td colspan="5" class="empty">Waiting for readings...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="footer">PARCELGUARD - Real-Time Parcel Weight Verification</div>
+</div>
+
+<script>
+const API = "";
+const POLL_INTERVAL = 2000;
+const EMPTY_THRESHOLD = 0.5;
+
+// Session states
+let isArmed = false;
+let isPassLocked = false;
+let audioEnabled = false;
+let audioCtx = null;
+let latestWeight = 0;
+let dashboardChart = null;
+
+// Stability checking
+let candidateStatus = "";
+let candidateCount = 0;
+const REQUIRED_BAD_READINGS = 3;
+const REQUIRED_MATCH_READINGS = 2;
+
+let rejectionLatched = false;
+let rejectedStatus = "";
+
+// --------------------------------------------------
+// AUDIO
+// --------------------------------------------------
+
+async function enableAudio() {
+  try {
+    const AudioClass = window.AudioContext || window.webkitAudioContext;
+
+    if (!AudioClass) {
+      alert("Audio is not supported by this browser.");
+      return;
+    }
+
+    if (!audioCtx) audioCtx = new AudioClass();
+
+    if (audioCtx.state === "suspended") {
+      await audioCtx.resume();
+    }
+
+    audioEnabled = true;
+
+    const button = document.getElementById("soundButton");
+    button.classList.add("active");
+    button.textContent = "✓ Sounds & Voice Enabled";
+    button.disabled = true;
+
+    document.getElementById("btnReady").disabled = false;
+
+    speakVoice("ParcelGuard audio enabled");
+
+    document.getElementById("sessionNotice").textContent =
+      "Audio enabled. Set your parcel weight and click Ready to begin.";
+
+  } catch (error) {
+    console.error(error);
+    alert("Could not enable audio. Please try again.");
+  }
+}
+
+function playTone(frequency, duration, type="sine", volume=0.15, delay=0) {
+  if (!audioEnabled || !audioCtx) return;
+
+  try {
+    const start = audioCtx.currentTime + delay;
+    const oscillator = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+
+    oscillator.type = type;
+    oscillator.frequency.setValueAtTime(frequency, start);
+
+    gain.gain.setValueAtTime(volume, start);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+
+    oscillator.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    oscillator.start(start);
+    oscillator.stop(start + duration);
+
+  } catch (error) {
+    console.warn("Audio error:", error);
+  }
+}
+
+function playUnderweightAlert() {
+  playTone(440, 0.18, "triangle", 0.2);
+  playTone(330, 0.25, "triangle", 0.2, 0.2);
+}
+
+function playOverweightAlert() {
+  playTone(880, 0.08, "sawtooth", 0.15);
+  playTone(880, 0.08, "sawtooth", 0.15, 0.12);
+  playTone(880, 0.08, "sawtooth", 0.15, 0.24);
+}
+
+function playSuccessChime() {
+  playTone(523.25, 0.2);
+  playTone(659.25, 0.2, "sine", 0.2, 0.15);
+  playTone(783.99, 0.4, "sine", 0.2, 0.3);
+}
+
+function speakVoice(message) {
+  if (!audioEnabled || !("speechSynthesis" in window)) return;
+
+  window.speechSynthesis.cancel();
+
+  const utterance = new SpeechSynthesisUtterance(message);
+  utterance.rate = 1;
+  utterance.pitch = 1.1;
+
+  window.speechSynthesis.speak(utterance);
+}
+
+// --------------------------------------------------
+// STATUS CALCULATION
+// --------------------------------------------------
+
+function getLiveStatus(weight) {
+  const expected = Number(document.getElementById("targetInput").value);
+  const tolerance = Number(document.getElementById("toleranceInput").value);
+
+  if (!Number.isFinite(expected) || expected <= 0 ||
+      !Number.isFinite(tolerance) || tolerance < 0) {
+    return {status:"INVALID SETTINGS", type:"wait"};
+  }
+
+  if (weight <= EMPTY_THRESHOLD) {
+    return {status:"NO PARCEL", type:"wait"};
+  }
+
+  const minimum = expected - tolerance;
+  const maximum = expected + tolerance;
+
+  if (weight >= minimum && weight <= maximum) {
+    return {status:"MATCH", type:"pass"};
+  }
+
+  if (weight < minimum) {
+    return {status:"UNDERWEIGHT", type:"under"};
+  }
+
+  return {status:"OVERWEIGHT", type:"over"};
+}
+
+function setStatus(text, type) {
+  const element = document.getElementById("status");
+  element.textContent = text;
+  element.className = "status " + type;
+}
+
+// --------------------------------------------------
+// SESSION CONTROL
+// --------------------------------------------------
+
+function startSession() {
+  if (!audioEnabled || isArmed || isPassLocked) return;
+
+  isArmed = true;
+  isPassLocked = false;
+
+  rejectionLatched = false;
+  rejectedStatus = "";
+
+  candidateStatus = "";
+  candidateCount = 0;
+
+  document.getElementById("btnReady").disabled = true;
+  document.getElementById("btnDone").disabled = false;
+
+  document.getElementById("sessionNotice").textContent =
+    "Verification started. Place your parcel on the weighing platform.";
+
+  speakVoice("Ready to place parcel");
+
+  evaluateWeight(latestWeight);
+}
+
+function endSession() {
+  isArmed = false;
+  isPassLocked = false;
+
+  candidateStatus = "";
+  candidateCount = 0;
+
+  rejectionLatched = false;
+  rejectedStatus = "";
+
+  if ("speechSynthesis" in window) {
+    window.speechSynthesis.cancel();
+  }
+
+  document.getElementById("btnReady").disabled = !audioEnabled;
+  document.getElementById("btnDone").disabled = true;
+
+  document.getElementById("sessionNotice").textContent =
+    "Session ended. You can now remove the parcel.";
+
+  updateLiveStatus(latestWeight);
+}
+
+// --------------------------------------------------
+// STABLE WEIGHT VERIFICATION
+// --------------------------------------------------
+
+function evaluateWeight(weight) {
+  if (!isArmed || isPassLocked) return;
+
+  const result = getLiveStatus(weight);
+
+  if (result.status === "INVALID SETTINGS") {
+    setStatus("INVALID SETTINGS", "wait");
+    candidateStatus = "";
+    candidateCount = 0;
+
+    document.getElementById("sessionNotice").textContent =
+      "Please enter valid expected weight and tolerance settings.";
+    return;
+  }
+
+  if (result.status === "NO PARCEL") {
+    candidateStatus = "";
+    candidateCount = 0;
+
+    setStatus("NO PARCEL", "wait");
+
+    document.getElementById("sessionNotice").textContent =
+      "Session active. Waiting for parcel placement.";
+    return;
+  }
+
+  // Count consecutive readings with the same status
+  if (candidateStatus === result.status) {
+    candidateCount++;
+  } else {
+    candidateStatus = result.status;
+    candidateCount = 1;
+  }
+
+  if (result.status === "MATCH") {
+    setStatus("CHECKING WEIGHT...", "wait");
+
+    document.getElementById("sessionNotice").textContent =
+      "Weight is within the acceptable range. Confirming stable reading...";
+
+    if (candidateCount >= REQUIRED_MATCH_READINGS) {
+      approveParcel();
+    }
+
+    return;
+  }
+
+  if (result.status === "UNDERWEIGHT" || result.status === "OVERWEIGHT") {
+    setStatus("CHECKING WEIGHT...", "wait");
+
+    document.getElementById("sessionNotice").textContent =
+      "Checking weight stability before deciding the parcel status...";
+
+    if (candidateCount >= REQUIRED_BAD_READINGS) {
+      rejectParcel(result.status);
+    }
+  }
+}
+
+function approveParcel() {
+  isArmed = false;
+  isPassLocked = true;
+
+  candidateStatus = "";
+  candidateCount = 0;
+
+  playSuccessChime();
+  speakVoice("Pass. Correct parcel weight.");
+
+  setStatus("MATCH - PASS", "pass");
+
+  document.getElementById("btnReady").disabled = true;
+  document.getElementById("btnDone").disabled = false;
+
+  document.getElementById("sessionNotice").textContent =
+    "Parcel approved! Click Done before removing the parcel.";
+}
+
+function rejectParcel(status) {
+  isArmed = false;
+  isPassLocked = false;
+
+  candidateStatus = "";
+  candidateCount = 0;
+
+  rejectionLatched = true;
+  rejectedStatus = status;
+
+  if (status === "UNDERWEIGHT") {
+    playUnderweightAlert();
+    speakVoice("Rejected. Parcel is underweight.");
+    setStatus("REJECTED - UNDERWEIGHT", "under");
+  } else {
+    playOverweightAlert();
+    speakVoice("Rejected. Parcel is overweight.");
+    setStatus("REJECTED - OVERWEIGHT", "over");
+  }
+
+  document.getElementById("btnReady").disabled = !audioEnabled;
+  document.getElementById("btnDone").disabled = true;
+
+  document.getElementById("sessionNotice").textContent =
+    "Parcel rejected. Remove or correct the parcel, then click Ready to try again.";
+}
+
+// --------------------------------------------------
+// LIVE DISPLAY
+// --------------------------------------------------
+
+function updateLiveStatus(weight) {
+  const result = getLiveStatus(weight);
+
+  if (rejectionLatched) {
+    if (result.status === rejectedStatus) {
+      setStatus("REJECTED - " + rejectedStatus, result.type);
+      return;
+    }
+
+    rejectionLatched = false;
+    rejectedStatus = "";
+  }
+
+  if (!isArmed && !isPassLocked) {
+    setStatus(result.status, result.type);
+  }
+}
+
+// --------------------------------------------------
+// SETTINGS
+// --------------------------------------------------
+
+document.getElementById("targetInput").addEventListener("input", updateSettingsDisplays);
+document.getElementById("toleranceInput").addEventListener("input", updateSettingsDisplays);
+
+function updateSettingsDisplays() {
+  const expected = Number(document.getElementById("targetInput").value);
+  const tolerance = Number(document.getElementById("toleranceInput").value);
+
+  document.getElementById("expectedDisplay").textContent =
+    Number.isFinite(expected) ? expected.toFixed(2) + " g" : "--";
+
+  document.getElementById("toleranceDisplay").textContent =
+    Number.isFinite(tolerance) ? tolerance.toFixed(2) + " g" : "--";
+
+  if (!isArmed && !isPassLocked) {
+    updateLiveStatus(latestWeight);
+  }
+}
+
+async function loadSettings() {
+  try {
+    const response = await fetch(API + "/api/settings", {cache:"no-store"});
+
+    if (!response.ok) throw new Error("Settings request failed");
+
+    const settings = await response.json();
+
+    document.getElementById("targetInput").value =
+      settings.expected_weight_g ?? 400;
+
+    document.getElementById("toleranceInput").value =
+      settings.tolerance_g ?? 5;
+
+    updateSettingsDisplays();
+
+  } catch (error) {
+    console.error(error);
+    document.getElementById("settingsMessage").textContent =
+      "Could not load saved settings.";
+  }
+}
+
+async function saveSettings() {
+  if (isArmed || isPassLocked) {
+    document.getElementById("settingsMessage").textContent =
+      "Click Done before changing settings.";
+    return;
+  }
+
+  const expected = Number(document.getElementById("targetInput").value);
+  const tolerance = Number(document.getElementById("toleranceInput").value);
+
+  if (!Number.isFinite(expected) || expected <= 0 ||
+      !Number.isFinite(tolerance) || tolerance < 0) {
+    document.getElementById("settingsMessage").textContent =
+      "Enter valid expected weight and tolerance.";
+    return;
+  }
+
+  const button = document.getElementById("saveSettings");
+  button.disabled = true;
+
+  try {
+    const response = await fetch(API + "/api/settings", {
+      method:"PUT",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+        expected_weight_g:expected,
+        tolerance_g:tolerance
+      })
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.detail || "Settings save failed");
+    }
+
+    document.getElementById("settingsMessage").textContent =
+      "Settings saved successfully.";
+
+    updateSettingsDisplays();
+
+    await refreshDashboard();
+
+  } catch (error) {
+    document.getElementById("settingsMessage").textContent =
+      "Could not save settings: " + error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+// --------------------------------------------------
+// DASHBOARD API
+// --------------------------------------------------
+
+function formatTime(value) {
+  if (!value) return "--";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return String(value);
+
+  return date.toLocaleTimeString();
+}
+
+function updateConnection(online) {
+  const element = document.getElementById("connection");
+
+  element.textContent = online
+    ? "● ESP32 / API Connected"
+    : "● Connection Lost";
+
+  element.className = "connection " + (online ? "online" : "offline");
+}
+
+async function refreshDashboard() {
+  try {
+    const response = await fetch(
+      API + "/api/dashboard?limit=120",
+      {cache:"no-store"}
+    );
+
+    if (!response.ok) throw new Error("Dashboard API unavailable");
+
+    const data = await response.json();
+
+    updateConnection(true);
+
+    const history = Array.isArray(data.history) ? data.history : [];
+    const latest = data.latest || history[history.length - 1] || null;
+
+    document.getElementById("total").textContent =
+      data.total_readings ?? data.total ?? history.length;
+
+    if (latest) {
+      const weight = Number(
+        latest.actual_weight_g ?? latest.actualWeightG ?? 0
+      );
+
+      if (Number.isFinite(weight)) {
+        latestWeight = weight;
+
+        document.getElementById("actual").textContent =
+          weight.toFixed(2);
+
+        document.getElementById("lastUpdate").textContent =
+          formatTime(latest.created_at || latest.timestamp);
+
+        if (isArmed) {
+          evaluateWeight(weight);
+        } else if (!isPassLocked) {
+          updateLiveStatus(weight);
+        }
+      }
+    }
+
+    renderHistory(history);
+    renderChart(history);
+
+    document.getElementById("chartStatus").textContent =
+      history.length + " readings loaded from database.";
+
+  } catch (error) {
+    console.error("Dashboard refresh failed:", error);
+    updateConnection(false);
+
+    document.getElementById("chartStatus").textContent =
+      "Waiting for backend connection...";
+  }
+}
+
+// --------------------------------------------------
+// HISTORY
+// --------------------------------------------------
+
+function escapeHTML(value) {
+  return String(value).replace(/[&<>"']/g, char => ({
+    "&":"&amp;",
+    "<":"&lt;",
+    ">":"&gt;",
+    '"':"&quot;",
+    "'":"&#39;"
+  })[char]);
+}
+
+function renderHistory(history) {
+  const tbody = document.getElementById("history");
+
+  if (!history.length) {
+    tbody.innerHTML =
+      '<tr><td colspan="5" class="empty">No measurement history available.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = [...history].reverse().slice(0, 30).map(item => {
+    const status = String(item.status || "UNKNOWN").toUpperCase();
+    const safeStatus = status.replace(/[^A-Z-]/g, "");
+    const actual = Number(item.actual_weight_g ?? 0);
+    const expected = Number(item.expected_weight_g ?? 0);
+
+    return `
+      <tr>
+        <td>${escapeHTML(formatTime(item.created_at || item.timestamp))}</td>
+        <td>${actual.toFixed(2)} g</td>
+        <td>${expected.toFixed(2)} g</td>
+        <td><span class="pill ${safeStatus}">${escapeHTML(status)}</span></td>
+        <td>${escapeHTML(item.source || "ESP32")}</td>
+      </tr>
+    `;
+  }).join("");
+}
+
+// --------------------------------------------------
+// CHART
+// --------------------------------------------------
+
+function initializeChart() {
+  if (typeof Chart === "undefined") {
+    document.getElementById("chartStatus").textContent =
+      "Chart library could not load. Check your internet connection.";
+    return;
+  }
+
+  dashboardChart = new Chart(
+    document.getElementById("weightChart"),
+    {
+      type:"line",
+      data:{
+        labels:[],
+        datasets:[{
+          label:"Actual Weight (g)",
+          data:[],
+          borderColor:"#d6ad60",
+          backgroundColor:"rgba(214,173,96,0.12)",
+          borderWidth:2,
+          pointRadius:2,
+          tension:0.3,
+          fill:true
+        }]
+      },
+      options:{
+        responsive:true,
+        maintainAspectRatio:false,
+        animation:false,
+        interaction:{intersect:false,mode:"index"},
+        plugins:{
+          legend:{labels:{color:"#cbd5e1"}}
+        },
+        scales:{
+          x:{
+            ticks:{color:"#94a3b8",maxTicksLimit:10},
+            grid:{color:"rgba(148,163,184,0.08)"}
+          },
+          y:{
+            beginAtZero:true,
+            ticks:{color:"#94a3b8"},
+            grid:{color:"rgba(148,163,184,0.08)"},
+            title:{
+              display:true,
+              text:"Weight (grams)",
+              color:"#94a3b8"
+            }
+          }
+        }
+      }
+    }
+  );
+}
+
+function renderChart(history) {
+  if (!dashboardChart) return;
+
+  const ordered = [...history].slice(-120);
+
+  dashboardChart.data.labels = ordered.map(
+    item => formatTime(item.created_at || item.timestamp)
+  );
+
+  dashboardChart.data.datasets[0].data = ordered.map(
+    item => Number(item.actual_weight_g ?? 0)
+  );
+
+  dashboardChart.update("none");
+}
+
+// --------------------------------------------------
+// STARTUP
+// --------------------------------------------------
+
+window.addEventListener("DOMContentLoaded", async () => {
+  document.getElementById("btnReady").disabled = true;
+  document.getElementById("btnDone").disabled = true;
+
+  initializeChart();
+
+  await loadSettings();
+  await refreshDashboard();
+
+  setInterval(refreshDashboard, POLL_INTERVAL);
+});
+</script>
+</body>
+</html>

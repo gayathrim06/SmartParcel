@@ -1,0 +1,15 @@
+
+services:
+  smartparcel:
+    build: .
+    container_name: smartparcel-app
+    ports:
+      - "8000:8000"
+    environment:
+      DB_PATH: /data/parcel.db
+    volumes:
+      - parcel_data:/data
+    restart: unless-stopped
+
+volumes:
+  parcel_data:
