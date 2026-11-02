@@ -1,4 +1,7 @@
-SMARTPARCEL LOCAL LIVE UPGRADE
+SMARTPARCEL LIVE IOT SYSTEM
+
+LIVE RENDER CLOUD URL:
+https://smartparcel-tcf5.onrender.com/
 
 WHAT IT DOES
 - ESP32 + HX711 sends actual measured weight to FastAPI every second over Wi-Fi.

@@ -1,9 +1,14 @@
 # PARCELGUARD - IoT-Based Smart Parcel Weight Verification System
 
+[![Live on Render](https://img.shields.io/badge/Render-Live%20Dashboard-brightgreen?style=for-the-badge&logo=render)](https://smartparcel-tcf5.onrender.com/)
+
+> 🌐 **Live Web Application:** [https://smartparcel-tcf5.onrender.com/](https://smartparcel-tcf5.onrender.com/)
+
 PARCELGUARD is an automated IoT parcel verification system that combines an ESP32 load cell weight station with a FastAPI cloud backend and an interactive real-time web dashboard.
 
 ## 🚀 Live Deployment
 - **Cloud Dashboard:** [https://smartparcel-tcf5.onrender.com/](https://smartparcel-tcf5.onrender.com/)
+- **ESP32 Ingestion Endpoint:** `https://smartparcel-tcf5.onrender.com/api/sensor`
 - **Health Check:** [https://smartparcel-tcf5.onrender.com/api/health](https://smartparcel-tcf5.onrender.com/api/health)
 - **API Documentation (Swagger):** [https://smartparcel-tcf5.onrender.com/docs](https://smartparcel-tcf5.onrender.com/docs)
 - **Database:** Hosted PostgreSQL on Render
